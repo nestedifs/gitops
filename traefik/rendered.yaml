@@ -1,0 +1,170 @@
+apiVersion: v1
+data:
+  run.sh: |-
+    @test "Test Access" {
+      curl -D - http://traefik/
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    app: traefik
+    release: traefik
+  name: traefik-test
+---
+apiVersion: v1
+data:
+  traefik.toml: |
+    # traefik.toml
+    logLevel = "info"
+    defaultEntryPoints = ["http", "httpn"]
+    [entryPoints]
+      [entryPoints.http]
+      address = ":80"
+      compress = true
+      [entryPoints.httpn]
+      address = ":8880"
+      compress = true
+    [ping]
+    entryPoint = "http"
+    [kubernetes]
+    [traefikLog]
+      format = "json"
+kind: ConfigMap
+metadata:
+  labels:
+    app: traefik
+    release: traefik
+  name: traefik
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations: null
+  labels:
+    app: traefik
+    release: traefik
+  name: traefik
+spec:
+  externalTrafficPolicy: Cluster
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+  - name: https
+    port: 443
+    targetPort: httpn
+  selector:
+    app: traefik
+    release: traefik
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: traefik
+    release: traefik
+  name: traefik
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traefik
+      release: traefik
+  template:
+    metadata:
+      annotations:
+        checksum/config: 04bfb0562535327112928eef3d184b5e116e59dbeb77762bd2248143c469eeea
+      labels:
+        app: traefik
+        chart: traefik-1.70.2
+        heritage: Tiller
+        release: traefik
+    spec:
+      containers:
+      - args:
+        - --configfile=/config/traefik.toml
+        image: traefik:1.7.12
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /pingping
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 2
+        name: traefik
+        ports:
+        - containerPort: 80
+          name: http
+          protocol: TCP
+        - containerPort: 8880
+          name: httpn
+          protocol: TCP
+        - containerPort: 443
+          name: https
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 1
+          httpGet:
+            path: /ping
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 2
+        resources: {}
+        volumeMounts:
+        - mountPath: /config
+          name: config
+      serviceAccountName: default
+      terminationGracePeriodSeconds: 60
+      volumes:
+      - configMap:
+          name: traefik
+        name: config
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    helm.sh/hook: test-success
+  labels:
+    app: traefik
+    release: traefik
+  name: traefik-test
+spec:
+  containers:
+  - command:
+    - /tools/bats/bats
+    - -t
+    - /tests/run.sh
+    image: dduportal/bats:0.4.0
+    name: traefik-test
+    volumeMounts:
+    - mountPath: /tests
+      name: tests
+      readOnly: true
+    - mountPath: /tools
+      name: tools
+  initContainers:
+  - command:
+    - bash
+    - -c
+    - |
+      set -ex
+      # copy bats to tools dir
+      cp -R /usr/local/libexec/ /tools/bats/
+    image: dduportal/bats:0.4.0
+    name: test-framework
+    volumeMounts:
+    - mountPath: /tools
+      name: tools
+  restartPolicy: Never
+  volumes:
+  - configMap:
+      name: traefik-test
+    name: tests
+  - emptyDir: {}
+    name: tools
